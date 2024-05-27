@@ -131,7 +131,28 @@ namespace CsprojModifier.Editor.Features
             _reorderableListAdditionalImportsAdditionalProjects.DoLayoutList();
         }
 
+        // unity asmdef + vs2022 가 생성하는 csproj의 시작
+        // <?xml version="1.0" encoding="utf-8"?>
+        // <Project ToolsVersion = "4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+        //
+        // unity asmdef + vscode 가 생성하는 csproj의 시작
+        // <Project ToolsVersion="Current">
+        //
+        // <Project> 태그에서 네임스페이스 존재 여부가 다르다.
+        // CsprojModifier 원본으로는 vs2022를 지원할수 있고 vscode를 지원하려면 우회해야한다.
+        // 
+        // vscode에서 vs2022 규격의 csproj를 사용하면 네임스페이스 관련 에러가 발생!
+        // 원본코드는 <Import>로 props 넣을때 네임스페이스를 붙이는데 이렇게 하면 visual studio code C# Dev kit에서 에러발생!
+        // error MSB4066: The attribute "xmlns" in element <Import> is unrecognized.
         public override string OnGeneratedCSProject(string path, string content)
+        {
+            var header = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
+            return content.StartsWith(header)
+                ? OnGeneratedCSProject_vs2022(path, content)
+                : OnGeneratedCSProject_vscode(path, content);
+        }
+
+        string OnGeneratedCSProject_vs2022(string path, string content)
         {
             var settings = CsprojModifierSettings.Instance;
             var canApply = path.EndsWith("Assembly-CSharp.csproj") ||
@@ -159,6 +180,54 @@ namespace CsprojModifier.Editor.Features
                     else if (target.Position == ImportProjectPosition.Prepend)
                     {
                         projectE.AddFirst(new XElement(nsMsbuild + "Import", new XAttribute("Project", target.Path)));
+                        projectE.AddFirst(new XComment($"{target.Path}:{hash}"));
+                    }
+                    else if (target.Position == ImportProjectPosition.AppendContent)
+                    {
+                        projectE.Add(new XComment($"{target.Path}:{hash}"));
+                        projectE.Add(XDocument.Load(target.Path).Root.Elements());
+                    }
+                    else if (target.Position == ImportProjectPosition.PrependContent)
+                    {
+                        projectE.AddFirst(XDocument.Load(target.Path).Root.Elements());
+                        projectE.AddFirst(new XComment($"{target.Path}:{hash}"));
+                    }
+                }
+
+                content = xDoc.ToString();
+                return content;
+            }
+
+            return content;
+        }
+
+
+        string OnGeneratedCSProject_vscode(string path, string content)
+        {
+            var settings = CsprojModifierSettings.Instance;
+            var canApply = path.EndsWith("Assembly-CSharp.csproj") ||
+                           path.EndsWith("Assembly-CSharp-Editor.csproj") ||
+                           settings.AdditionalImportsAdditionalProjects.Any(x => PathEx.Equals(PathEx.GetFullPath(x), path) || x == "*");
+
+
+            if (settings.AdditionalImports.Any() && canApply)
+            {
+                var baseDir = Path.GetDirectoryName(path);
+                var xDoc = XDocument.Parse(content);
+                var projectE = xDoc.Element("Project");
+
+                foreach (var target in settings.AdditionalImports)
+                {
+                    var hash = string.Concat(SHA256.Create().ComputeHash(File.ReadAllBytes(Path.GetFullPath(Path.Combine(baseDir, target.Path)))).Select(x => x.ToString("x2")));
+
+                    if (target.Position == ImportProjectPosition.Append)
+                    {
+                        projectE.Add(new XComment($"{target.Path}:{hash}"));
+                        projectE.Add(new XElement("Import", new XAttribute("Project", target.Path)));
+                    }
+                    else if (target.Position == ImportProjectPosition.Prepend)
+                    {
+                        projectE.AddFirst(new XElement("Import", new XAttribute("Project", target.Path)));
                         projectE.AddFirst(new XComment($"{target.Path}:{hash}"));
                     }
                     else if (target.Position == ImportProjectPosition.AppendContent)
