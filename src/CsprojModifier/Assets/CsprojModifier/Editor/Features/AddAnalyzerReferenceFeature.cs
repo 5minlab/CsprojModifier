@@ -72,7 +72,16 @@ namespace CsprojModifier.Editor.Features
             };
         }
 
+        // InsertAdditionalImportFeature와 동일한 문제가 있다
         public override string OnGeneratedCSProject(string path, string content)
+        {
+            var header = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
+            return content.StartsWith(header)
+                ? OnGeneratedCSProject_vs2022(path, content)
+                : OnGeneratedCSProject_vscode(path, content);
+        }
+
+        string OnGeneratedCSProject_vs2022(string path, string content)
         {
             var settings = CsprojModifierSettings.Instance;
             if (RoslynAnalyzerUnityEditorNativeSupport.HasRoslynAnalyzerIdeSupport) return content;
@@ -94,6 +103,36 @@ namespace CsprojModifier.Editor.Features
                     var baseDir = Path.GetDirectoryName(path);
                     var analyzersInCsproj = new HashSet<string>(projectE.Descendants(nsMsbuild + "Analyzer").Select(x => x.Attribute("Include")?.Value).Where(x => x != null));
                     projectE.Add(new XElement(nsMsbuild + "ItemGroup", analyzers.Where(x => !analyzersInCsproj.Contains(x)).Select(x => new XElement(nsMsbuild + "Analyzer", new XAttribute("Include", x)))));
+                    content = xDoc.ToString();
+                }
+
+                return content;
+            }
+
+            return content;
+        }
+
+        string OnGeneratedCSProject_vscode(string path, string content)
+        {
+            var settings = CsprojModifierSettings.Instance;
+            if (RoslynAnalyzerUnityEditorNativeSupport.HasRoslynAnalyzerIdeSupport) return content;
+            if (!settings.EnableAddAnalyzerReferences) return content;
+
+            var canApply = path.EndsWith("Assembly-CSharp.csproj") ||
+                           path.EndsWith("Assembly-CSharp-Editor.csproj") ||
+                           (settings.AddAnalyzerReferencesAdditionalProjects?.Any(x => PathEx.Equals(PathEx.GetFullPath(x), path) || x == "*") ?? false);
+
+            if (canApply)
+            {
+                var analyzers = GetAnalyzers();
+                if (analyzers.Any())
+                {
+                    var xDoc = XDocument.Parse(content);
+                    var projectE = xDoc.Element("Project");
+
+                    var baseDir = Path.GetDirectoryName(path);
+                    var analyzersInCsproj = new HashSet<string>(projectE.Descendants("Analyzer").Select(x => x.Attribute("Include")?.Value).Where(x => x != null));
+                    projectE.Add(new XElement("ItemGroup", analyzers.Where(x => !analyzersInCsproj.Contains(x)).Select(x => new XElement("Analyzer", new XAttribute("Include", x)))));
                     content = xDoc.ToString();
                 }
 
